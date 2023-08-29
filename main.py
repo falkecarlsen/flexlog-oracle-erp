@@ -38,8 +38,12 @@ class CSVDataFrame:
     monthly_hours: Dict
 
     def __init__(self, csv_filename: str):
-        self.timesheet = self.convert_date_to_datetime(pd.read_csv(csv_filename, sep=";", decimal=","))
+        self.timesheet = self.convert_date_to_datetime(
+            pd.read_csv(csv_filename, sep=";", decimal=",", skip_blank_lines=True)
+        )
         self.timesheet.set_index("Date", inplace=True)
+        # remove rows with NaN in the 'Login' column
+        self.timesheet = self.timesheet[self.timesheet["Login"].notna()]
         self.project = csv_filename.split("-")[1]
         self.calculate_mean_login_logout()
         self.calculate_total_hours_per_month()
@@ -256,27 +260,76 @@ class Timesheet:
         print(erp_report)
 
 
-start_a = datetime(2023, 1, 1, 9)
-start_b = datetime(2023, 1, 1, 10)
+def test_range():
+    start_a = datetime(2023, 1, 1, 9)
+    start_b = datetime(2023, 1, 1, 10)
 
-end_a = datetime(2023, 1, 1, 11)
-end_b = datetime(2023, 1, 1, 11)
+    end_a = datetime(2023, 1, 1, 11)
+    end_b = datetime(2023, 1, 1, 11)
 
-a = DateTimeRange(start_a, end_a)
-b = DateTimeRange(start_b, end_b)
+    a = DateTimeRange(start_a, end_a)
+    b = DateTimeRange(start_b, end_b)
 
-print("a intersects b: ", a.is_intersection(b))
-print("a intersection b: ", a.intersection(b))
-print("a intersection b: ", a.timedelta - a.intersection(b).timedelta)
+    print("a intersects b: ", a.is_intersection(b))
+    print("a intersection b: ", a.intersection(b))
+    print("a intersection b: ", a.timedelta - a.intersection(b).timedelta)
+
+    time_range = DateTimeRange("2015-03-22T10:00:00+0900", "2015-03-22T10:10:00+0900")
+    x = DateTimeRange("2015-03-22T10:05:00+0900", "2015-03-22T10:15:00+0900")
+    print(time_range.intersection(x))
 
 
-time_range = DateTimeRange("2015-03-22T10:00:00+0900", "2015-03-22T10:10:00+0900")
-x = DateTimeRange("2015-03-22T10:05:00+0900", "2015-03-22T10:15:00+0900")
-print(time_range.intersection(x))
+def calculate_total_hours(timesheet1: DataFrame, timesheet2: DataFrame) -> Tuple[float, timedelta]:
+    """
+    Calculates the total hours of two timesheets, and subtracts intersecting hours.
+    Where char represent projects and number of chars indicate hours:
+    --aaaaaaaa
+    bbbb------
+    8 hours for project a, and 4 for project b. Offset of project a block is two hours.
+    We expect to have a total of 10 hours, and 2 hours of intersecting hours.
+    """
+    def convert_to_datetime(t, r):
+        t: pandas.Timestamp
+        t_s_tmp = datetime.strptime(r["Login"], "%H.%M")
+        t_e_tmp = datetime.strptime(r["Logout"], "%H.%M")
+        t_start = t.to_pydatetime().replace(hour=t_s_tmp.hour, minute=t_s_tmp.minute)
+        t_end = t.to_pydatetime().replace(hour=t_e_tmp.hour, minute=t_e_tmp.minute)
+        return t_start, t_end
+
+    total_hours: float = 0
+    total_intersecting_hours: timedelta = timedelta(0)
+
+    # sum total hours in both timesheets
+    t1 = pd.to_numeric(timesheet1["Duration"]).sum()
+    total_hours += t1
+    t2 = pd.to_numeric(timesheet2["Duration"]).sum()
+    total_hours += t2
+    print(f"timesheet1: {t1}, timesheet2: {t2}")
+
+    for t1, d1 in timesheet1.iterrows():
+        t1_start, t1_end = convert_to_datetime(t1, d1)
+        r1 = DateTimeRange(t1_start, t1_end)
+
+        for t2, d2 in timesheet2.iterrows():
+            t2_start, t2_end = convert_to_datetime(t2, d2)
+            r2 = DateTimeRange(t2_start, t2_end)
+
+            if r1.is_intersection(r2):
+                i1 = r1.intersection(r2).timedelta
+                # print(f"intersection of {i1}\n\t{r1}\n\t{r2}")
+                total_hours -= i1.total_seconds() / 3600
+                total_intersecting_hours += i1
+
+    return total_hours, total_intersecting_hours
 
 
-exit(0)
-hours = Timesheet("aau-RA-21_11_2022-01_06_2023.csv")
-hours.add_sub("aau-CEDAR-07_03_2023-31_05_2023.csv")
+hours = Timesheet("aau-RA-21_11_2022-28_08_2023.csv")
+hours.add_sub("aau-CEDAR-07_03_2023-28_08_2023.csv")
 
-hours.calculate_erp_report()
+
+total, intersect = calculate_total_hours(hours.total.timesheet, hours.sub[0].timesheet)
+print("total hours: ", total)
+print("intersecting hours: ", intersect.days * 24)
+
+
+# hours.calculate_erp_report()
