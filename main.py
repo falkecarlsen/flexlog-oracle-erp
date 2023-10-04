@@ -44,6 +44,8 @@ class CSVDataFrame:
         self.timesheet.set_index("Date", inplace=True)
         # remove rows with NaN in the 'Login' column
         self.timesheet = self.timesheet[self.timesheet["Login"].notna()]
+        # remove sick days from counting towards hours
+        self.timesheet["Duration"] = self.timesheet["Duration"].loc[self.timesheet["Sick day"] != 1.0]
         self.project = csv_filename.split("-")[1]
         self.calculate_mean_login_logout()
         self.calculate_total_hours_per_month()
@@ -279,7 +281,9 @@ def test_range():
     print(time_range.intersection(x))
 
 
-def calculate_total_hours(timesheet1: DataFrame, timesheet2: DataFrame) -> Tuple[float, timedelta]:
+def calculate_total_hours(
+    timesheet1: DataFrame, timesheet2: DataFrame, start: datetime = None, stop: datetime = None
+) -> Tuple[float, timedelta]:
     """
     Calculates the total hours of two timesheets, and subtracts intersecting hours.
     Where char represent projects and number of chars indicate hours:
@@ -288,6 +292,7 @@ def calculate_total_hours(timesheet1: DataFrame, timesheet2: DataFrame) -> Tuple
     8 hours for project a, and 4 for project b. Offset of project a block is two hours.
     We expect to have a total of 10 hours, and 2 hours of intersecting hours.
     """
+
     def convert_to_datetime(t, r):
         t: pandas.Timestamp
         t_s_tmp = datetime.strptime(r["Login"], "%H.%M")
@@ -299,6 +304,10 @@ def calculate_total_hours(timesheet1: DataFrame, timesheet2: DataFrame) -> Tuple
     total_hours: float = 0
     total_intersecting_hours: timedelta = timedelta(0)
 
+    # truncate to range
+    timesheet1 = timesheet1.truncate(start, stop)
+    timesheet2 = timesheet2.truncate(start, stop)
+
     # sum total hours in both timesheets
     t1 = pd.to_numeric(timesheet1["Duration"]).sum()
     total_hours += t1
@@ -308,10 +317,16 @@ def calculate_total_hours(timesheet1: DataFrame, timesheet2: DataFrame) -> Tuple
 
     for t1, d1 in timesheet1.iterrows():
         t1_start, t1_end = convert_to_datetime(t1, d1)
+        if start and stop:
+            if t1_start < start or t1_end > stop:
+                continue
         r1 = DateTimeRange(t1_start, t1_end)
 
         for t2, d2 in timesheet2.iterrows():
             t2_start, t2_end = convert_to_datetime(t2, d2)
+            if start and stop:
+                if t2_start < start or t2_end > stop:
+                    continue
             r2 = DateTimeRange(t2_start, t2_end)
 
             if r1.is_intersection(r2):
@@ -323,11 +338,13 @@ def calculate_total_hours(timesheet1: DataFrame, timesheet2: DataFrame) -> Tuple
     return total_hours, total_intersecting_hours
 
 
-hours = Timesheet("aau-RA-21_11_2022-28_08_2023.csv")
-hours.add_sub("aau-CEDAR-07_03_2023-28_08_2023.csv")
+hours = Timesheet("aau-RA-21_11_2022-04_10_2023.csv")
+hours.add_sub("aau-CEDAR-07_03_2023-28_09_2023.csv")
 
 
-total, intersect = calculate_total_hours(hours.total.timesheet, hours.sub[0].timesheet)
+total, intersect = calculate_total_hours(
+    hours.total.timesheet, hours.sub[0].timesheet, datetime(2023, 9, 1), datetime(2023, 9, 30)
+)
 print("total hours: ", total)
 print("intersecting hours: ", intersect.days * 24)
 
